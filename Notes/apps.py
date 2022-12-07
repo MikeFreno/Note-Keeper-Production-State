@@ -6,8 +6,9 @@ class NotesConfig(AppConfig):
     default_auto_field = "django.db.models.BigAutoField"
     name = "Notes"
 
-    def runner():
+    def ready(self):
         from . import jobs
 
-        print("pass")
-        jobs.scheduler()
+        if os.environ.get("RUN_MAIN", None) != "true":
+            print("started")
+            jobs.start_scheduler()

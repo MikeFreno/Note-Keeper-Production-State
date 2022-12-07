@@ -1,15 +1,18 @@
+from schedule import Scheduler
 import schedule
-from sendgrid import SendGridAPIClient
-from sendgrid.helpers.mail import Mail, To, From, Subject, Content, SendAt
+import sib_api_v3_sdk
+from sib_api_v3_sdk.rest import ApiException
 from .models import Reminder
 from datetime import datetime, timedelta
 from dotenv import load_dotenv, find_dotenv
 import os
 import random
+import threading
 import time
 
 
 def find_today_and_tomorrow_remiders():
+    print("listing started")
     now = datetime.now()
     today = str(now.strftime(f"%m/%d/%Y"))
     time_delta = datetime.now() + timedelta(1)
@@ -24,117 +27,116 @@ def find_today_and_tomorrow_remiders():
         ):
             date = reminder.date.split("/")
             time_ = reminder.time.split(":")
-            hour = int(time_[0]) - reminder.author.timezone_Shift
+            hour = time_[0]
+            if reminder.time.split(" ")[1] == "PM":
+                hour = str(int(hour) + 12)
             min = time_[1].split(" ")[0]
-            date_time = datetime(
-                year=int(date[2]),
-                month=int(date[0]),
-                day=int(date[1]),
-                hour=int(hour),
-                minute=int(min),
-            )
-            unix_time = int(time.mktime(date_time.timetuple()))
-
+            timezone = reminder.author.timezone_Shift
+            timezone_minutes = (timezone % 1) * 60
+            hour = int(hour) + int(timezone)
+            min = int(min) + timezone_minutes
+            day = int(date[1])
+            month = int(date[0])
+            year = int(date[2])
+            if min >= 60:
+                min -= 60
+                hour += 1
+            if hour >= 24:
+                hour -= 24
+                day += 1
+            if day == 32:
+                day = 1
+                month += 1
+            elif month == 4 or month == 6 or month == 9 or month == 11:
+                if day == 31:
+                    day = 1
+                    month += 1
+            elif month == 2 and day >= 29:
+                day = 1
+                month += 1
+            if month == 13:
+                month = 1
+                year += 1
+            date_time = datetime(year=year, month=month, day=day, hour=hour, minute=min)
             list_to_queue.append(
-                [
-                    {
-                        "reminder": reminder,
-                        "description": reminder.description,
-                        "user": reminder.author.email,
-                        "time": unix_time,
-                    },
-                ]
+                {
+                    "reminder": reminder,
+                    "description": reminder.description,
+                    "user": reminder.author.email,
+                    "time": date_time,
+                },
             )
+    print("pass make list")
     emailer_offload_to_sendgrid(list_to_queue)
 
 
-css_styles = """<style>
-      html {
-        margin: 2em 1em 1em 2em;
-        font-size: larger;
-      }
-      .body {
-        margin: 2em 1em 1em 2em;
-        font-family: "Poppins", sans-serif;
-        background-color: #3f4e4f;
-        width: 100vw;
-        color: #a27b5c;
-      }
-      h2 {
-        background-color: #3f4e4f;
-      }
-      .text-center {
-        background-color: #3f4e4f;
-      }
-    </style>"""
-goodbye_list = ["-KBYE", "-See ya", "-Thanks for using the app!", "-Have a good one :)"]
-
-
 def emailer_offload_to_sendgrid(list_to_queue):
+    print("handoff")
+    configuration = sib_api_v3_sdk.Configuration()
     load_dotenv(find_dotenv())
-    SECRET_KEY = os.environ["SENDGRID_API_KEY"]
-    bye = random.choice(goodbye_list)
+    KEY = os.environ["SENDINBLUE_KEY"]
     for reminder in list_to_queue:
-        print("pass")
+        print(reminder)
+        email = reminder["user"]
         desc = reminder["description"]
-        message = Mail()
-        message.to = [
-            To(
-                email=reminder["email"],
-            ),
-        ]
-        message.from_email = From(
-            email="michael@freno.me",
-            name="Michael Freno",
+        configuration.api_key["api-key"] = KEY
+        api_instance = sib_api_v3_sdk.TransactionalEmailsApi(
+            sib_api_v3_sdk.ApiClient(configuration)
         )
-        message.content = [
-            Content(
-                mime_type="text/html",
-                content=f"""<!DOCTYPE html>
-<html lang="en">
-  <head>
-    <meta charset="UTF-8" />
-    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    {css_styles}
-    <link
-      rel="stylesheet"
-      href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.0/dist/css/bootstrap.min.css"
-    />
-  </head>
-  <body class="body">
-    <h2 class="text-center">Hey!</h2>
-    <div class="text-center">This is your reminder for {desc}</div>
-    <div class="text-center">{bye}</div>
-    <br /><br /><br />
-    <div class="text-center" style="font-size: medium">
-      You can adjust these emails in the user settings at<br /><a
-        style="color: #a27b5c"
-        href="https://notesapp.net"
-        >notesapp.net</a
-      >
-    </div>
-  </body>
-</html>
-""",
-            )
-        ]
-        message.send_at = SendAt(reminder["time"])
-        message.subject = Subject(reminder["description"])
-        sendgrid_client = SendGridAPIClient(SECRET_KEY)
-
-        response = sendgrid_client.send(message)
-        print(response.status_code)
-        print(response.body)
-        print(response.headers)
-        to_set = reminder["reminder"]
-        to_set.queued = False
+        subject = "Here is Your Reminder"
+        sender = {"name": "Michael Freno", "email": "mike@notesapp.net"}
+        templateId = 3
+        to = [{"email": email}]
+        scheduledAt = reminder["time"]
+        params = {"LASTNAME": desc}
+        send_smtp_email = sib_api_v3_sdk.SendSmtpEmail(
+            to=to,
+            template_id=templateId,
+            sender=sender,
+            subject=subject,
+            scheduled_at=scheduledAt,
+            params=params,
+        )
+        try:
+            api_response = api_instance.send_transac_email(send_smtp_email)
+            print(api_response)
+        except ApiException as e:
+            print("Exception when calling S`MTPApi->send_transac_email: %s\n" % e)
+            to_set = reminder["reminder"]
+            to_set.queued = False
 
 
-schedule.every(12).hours.do(find_today_and_tomorrow_remiders)
+def run_continuously(self, interval=1):
+    """Continuously run, while executing pending jobs at each elapsed
+    time interval.
+    @return cease_continuous_run: threading.Event which can be set to
+    cease continuous run.
+    Please note that it is *intended behavior that run_continuously()
+    does not run missed jobs*. For example, if you've registered a job
+    that should run every minute and you set a continuous run interval
+    of one hour then your job won't be run 60 times at each interval but
+    only once.
+    """
+
+    cease_continuous_run = threading.Event()
+
+    class ScheduleThread(threading.Thread):
+        @classmethod
+        def run(cls):
+            while not cease_continuous_run.is_set():
+                self.run_pending()
+                time.sleep(interval)
+
+    continuous_thread = ScheduleThread()
+    continuous_thread.setDaemon(True)
+    continuous_thread.start()
+    return cease_continuous_run
 
 
-def scheduler():
-    while True:
-        schedule.run_pending()
-        time.sleep(1)
+Scheduler.run_continuously = run_continuously  # type: ignore
+
+
+def start_scheduler():
+    scheduler = Scheduler()
+    scheduler.every(12).hours.do(find_today_and_tomorrow_remiders)
+    scheduler.run_continuously()  # type: ignore

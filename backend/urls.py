@@ -24,11 +24,13 @@ router = routers.DefaultRouter()
 router.register(r"tasks", views.TaskView, "task")
 router.register(r"reminders", views.ReminderView, "reminder")
 router.register(r"users", v.UserView, "user")
+# router.register(r"user_timezones", v.TimezoneUpdateView, "user_timezones")
 
 urlpatterns = [
     path("", views.index, name="index"),
     path("api/auth/login/state/", v.user_state),
     path("api/emailer/register/", v.registration_emailer),
+    # path("api/users/timezones", v.patch),
     path("admin/", admin.site.urls),
     path("api/", include(router.urls)),
     path("api/auth/", include("dj_rest_auth.urls")),
